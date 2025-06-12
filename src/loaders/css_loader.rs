@@ -1,4 +1,4 @@
-use gtk4::{gdk::Display, CssProvider};
+use gtk4::{CssProvider, gdk::Display};
 
 use super::Loader;
 use crate::utils::errors::*;
@@ -7,9 +7,9 @@ impl Loader {
     pub fn load_css() -> Result<(), FlashError> {
         let provider = CssProvider::new();
 
-        let display = Display::default().ok_or(FlashError{
+        let display = Display::default().ok_or(FlashError {
             error: FlashErrorType::EnvVar(String::from("Default Display")),
-            traceback: format!("Failed to get default display...")
+            traceback: format!("Failed to get default display..."),
         })?;
 
         // Load the base line css

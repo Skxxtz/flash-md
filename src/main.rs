@@ -1,30 +1,70 @@
-use std::{cell::{Cell, RefCell}, collections::VecDeque, fs::File, io::{BufRead, BufReader}};
+use std::{
+    cell::{Cell, RefCell},
+    env,
+    fs::File,
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+};
 
 use gtk4::{
-    gdk::Key, gio::{
-        prelude::{ApplicationExt, ApplicationExtManual}, ApplicationFlags,
-
-    }, glib::{object::ObjectExt, WeakRef}, prelude::{BoxExt, EventControllerExt, GtkWindowExt, WidgetExt}, Application, ApplicationWindow, Box, EventControllerKey, Label, TextView
+    Application, ApplicationWindow, Box, EventControllerKey, Label, TextView,
+    gdk::Key,
+    gio::{
+        ApplicationFlags,
+        prelude::{ApplicationExt, ApplicationExtManual},
+    },
+    glib::{WeakRef, object::ObjectExt},
+    prelude::{BoxExt, EventControllerExt, GtkWindowExt, WidgetExt},
 };
 use gtk4_layer_shell::LayerShell;
 
 mod loaders;
 mod utils;
 use loaders::Loader;
-use rand::{rngs::ThreadRng, Rng};
+use rand::{Rng, rngs::ThreadRng};
 use utils::errors::FlashError;
+
+fn expand_path(input: &str) -> PathBuf {
+    // Handle tilde expansion (~) manually
+    if input.starts_with("~/") || input == "~" {
+        let home_dir = env::home_dir().expect("Could not get home directory");
+        if input == "~" {
+            return home_dir;
+        } else {
+            return home_dir.join(&input[2..]);
+        }
+    }
+
+    let path = Path::new(input);
+
+    if path.exists() {
+        path.to_path_buf()
+    } else {
+        let current_dir = env::current_dir().expect("Failed to get current directory");
+        current_dir.join(path)
+    }
+}
 
 fn main() {
     let app = create_application();
+
+    let args: Vec<String> = env::args().collect();
+    let file = args
+        .get(1)
+        .expect("There was no file provided. Usecase: flash <file>");
+    let path = expand_path(file);
+    if !path.exists() || !path.is_file() {
+        panic!("The first argument was not a file.")
+    }
 
     app.connect_activate({
         move |app| {
             let _ = Loader::load_resources();
             let _ = Loader::load_css();
 
-            if let Ok(cards) = load_cards("/home/basti/uni/computer-vision/vocab.md"){
+            if let Ok(cards) = load_cards(&path) {
                 let window = create_window(app);
-                let ui = build_ui(&window, cards);
+                build_ui(&window, cards);
 
                 window.present();
                 window.grab_focus();
@@ -66,7 +106,6 @@ fn create_window(app: &Application) -> ApplicationWindow {
     win.set_layer(gtk4_layer_shell::Layer::Overlay);
     win.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
 
-
     win
 }
 
@@ -74,33 +113,35 @@ fn create_window(app: &Application) -> ApplicationWindow {
 pub struct Card {
     title: String,
     body: String,
-    history: VecDeque<bool>
 }
 
-
-fn load_cards(path: &str) -> Result<Vec<Card>, FlashError> {
-    let file = File::open(path).map_err(|e| FlashError {
-        error: utils::errors::FlashErrorType::FileReadError(path.to_string()),
-        traceback: e.to_string()
+fn load_cards(path: &PathBuf) -> Result<Vec<Card>, FlashError> {
+    let file = File::open(&path).map_err(|e| FlashError {
+        error: utils::errors::FlashErrorType::FileReadError(format!("{}", path.display())),
+        traceback: e.to_string(),
     })?;
     let reader = BufReader::new(file);
-    
+
     let mut current_title = None;
     let mut current_body = String::new();
     let mut cards = Vec::new();
-    reader.lines().into_iter().filter_map(Result::ok).for_each(|line| {
-        if let Some(stripped) = line.strip_prefix("# "){
-            push_section(&mut cards, current_title.take(), &current_body);
-            current_body.clear();
-            let trimmed = stripped.trim().to_string();
-            if !trimmed.is_empty() {
-                current_title = Some(trimmed);
+    reader
+        .lines()
+        .into_iter()
+        .filter_map(Result::ok)
+        .for_each(|line| {
+            if let Some(stripped) = line.strip_prefix("# ") {
+                push_section(&mut cards, current_title.take(), &current_body);
+                current_body.clear();
+                let trimmed = stripped.trim().to_string();
+                if !trimmed.is_empty() {
+                    current_title = Some(trimmed);
+                }
+            } else {
+                current_body.push_str(&line);
+                current_body.push_str("\n");
             }
-        } else {
-            current_body.push_str(&line);
-            current_body.push_str("\n");
-        }
-    });
+        });
     push_section(&mut cards, current_title, &current_body);
 
     Ok(cards)
@@ -111,15 +152,11 @@ fn push_section(sections: &mut Vec<Card>, title: Option<String>, body: &String) 
         sections.push(Card {
             title,
             body: body.to_string(),
-            history: VecDeque::new(),
         });
     }
 }
 
-struct UI {
-    buffer: WeakRef<TextView>,
-}
-fn build_ui(win: &ApplicationWindow, cards: Vec<Card>){
+fn build_ui(win: &ApplicationWindow, cards: Vec<Card>) {
     let title = Label::builder()
         .valign(gtk4::Align::Start)
         .hexpand(true)
@@ -132,7 +169,7 @@ fn build_ui(win: &ApplicationWindow, cards: Vec<Card>){
         .hexpand(true)
         .name("body")
         .build();
-    let holder =Box::builder()
+    let holder = Box::builder()
         .name("viewport")
         .vexpand(true)
         .hexpand(true)
@@ -152,19 +189,19 @@ fn build_ui(win: &ApplicationWindow, cards: Vec<Card>){
         let win = win.downgrade();
 
         let num_cards = cards.len() - 1;
-        let rng: RefCell<ThreadRng>= RefCell::new(rand::rng());
+        let rng: RefCell<ThreadRng> = RefCell::new(rand::rng());
         let current_page: Cell<u8> = Cell::new(0);
         let view = text_view.downgrade();
         let current_index: Cell<usize> = Cell::new(rng.borrow_mut().random_range(0..=num_cards));
-        
-        if let Some(card) = cards.get(current_index.get()){
+
+        if let Some(card) = cards.get(current_index.get()) {
             title.set_text(&card.title);
         }
         let title = title.downgrade();
         move |_controller, key, _code, _mods| {
             match key {
                 Key::Escape => {
-                    if let Some(win) = win.upgrade(){
+                    if let Some(win) = win.upgrade() {
                         win.close();
                         return true.into();
                     }
@@ -174,9 +211,9 @@ fn build_ui(win: &ApplicationWindow, cards: Vec<Card>){
                         current_page.set(0); // flip page to front
                         // next card
                         let index = rng.borrow_mut().random_range(0..=num_cards);
-                        if let Some(card) = cards.get(index){
+                        if let Some(card) = cards.get(index) {
                             current_index.set(index);
-                            if let Some(view) = view.upgrade(){
+                            if let Some(view) = view.upgrade() {
                                 view.set_text("");
                             }
                             if let Some(title) = title.upgrade() {
@@ -188,7 +225,7 @@ fn build_ui(win: &ApplicationWindow, cards: Vec<Card>){
                     } else {
                         current_page.set(1); // flip page to back
                         // show card back
-                        if let Some(card) = cards.get(current_index.get()){
+                        if let Some(card) = cards.get(current_index.get()) {
                             if let Some(view) = view.upgrade() {
                                 view.set_markup(&card.body);
                             }
@@ -198,7 +235,6 @@ fn build_ui(win: &ApplicationWindow, cards: Vec<Card>){
                 _ => {}
             }
             return false.into();
-
         }
     });
 
