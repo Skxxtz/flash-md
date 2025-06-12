@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+    <gresource prefix="/dev/skxxtz/flashmd">
+        <file alias="main.css">main.css</file>
+    </gresource>
+    <gresource prefix="/org/gtk/libgtk/icons/">
+    </gresource>
+</gresources>
